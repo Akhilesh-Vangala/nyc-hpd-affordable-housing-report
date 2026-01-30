@@ -28,6 +28,3 @@ renv/local
 # OS
 .DS_Store
 Thumbs.db
-
-report_for_gpt.txt
-.cursor
