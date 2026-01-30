@@ -1,0 +1,973 @@
+---
+title: "NYC HPD Affordable Housing Data: Data Quality Checks and Exploratory Analysis"
+author: ""
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include = FALSE}
+suppressPackageStartupMessages({
+  library(here)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(purrr)
+  library(tibble)
+  library(forcats)
+  library(janitor)
+  library(kableExtra)
+  library(lubridate)
+})
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.path = here::here("outputs", "figures", ""),
+  fig.width = 7,
+  fig.height = 4
+)
+set.seed(42)
+```
+
+# Data source and description
+
+NYC Open Data, HPD Housing New York: project-level and building-level tables. Coverage: projects started on or after 2014-01-01 (Housing New York 2014–2021, Housing Our Neighbors 2022–present). Data accessed: `r Sys.Date()`.
+
+```{r load}
+url_projects <- "https://data.cityofnewyork.us/api/views/hq68-rnsi/rows.csv?accessType=DOWNLOAD"
+url_buildings <- "https://data.cityofnewyork.us/api/views/hg8x-zxpr/rows.csv?accessType=DOWNLOAD"
+path_raw <- here::here("data", "raw")
+path_projects <- file.path(path_raw, "hpd_projects.csv")
+path_buildings <- file.path(path_raw, "hpd_buildings.csv")
+
+if (file.exists(path_projects)) {
+  df_projects <- readr::read_csv(path_projects, show_col_types = FALSE)
+} else {
+  df_projects <- readr::read_csv(url_projects, show_col_types = FALSE)
+  if (!dir.exists(path_raw)) dir.create(path_raw, recursive = TRUE)
+  readr::write_csv(df_projects, path_projects)
+}
+
+if (file.exists(path_buildings)) {
+  df_buildings <- readr::read_csv(path_buildings, show_col_types = FALSE)
+} else {
+  df_buildings <- readr::read_csv(url_buildings, show_col_types = FALSE)
+  if (!dir.exists(path_raw)) dir.create(path_raw, recursive = TRUE)
+  readr::write_csv(df_buildings, path_buildings)
+}
+```
+
+```{r load-dims}
+n_projects <- nrow(df_projects)
+n_buildings <- nrow(df_buildings)
+ncol(df_projects)
+ncol(df_buildings)
+```
+
+```{r data-sources-table}
+tbl_sources <- tibble::tibble(
+  dataset = c("Housing New York Units by Project", "Housing New York Units by Building"),
+  url = c("https://data.cityofnewyork.us/Housing-Development/Housing-New-York-Units-by-Project/hq68-rnsi",
+          "https://data.cityofnewyork.us/Housing-Development/Housing-New-York-Units-by-Building/hg8x-zxpr")
+)
+knitr::kable(tbl_sources, format = "html", col.names = c("Dataset", "URL")) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+# Data quality
+
+Structure, types, missingness, duplicates, value ranges, key integrity, and cross-table consistency for both tables.
+
+## Structure and types
+
+```{r validation-projects}
+n_rows_projects <- nrow(df_projects)
+n_cols_projects <- ncol(df_projects)
+missing_projects <- colSums(is.na(df_projects))
+pct_missing_projects <- round(100 * missing_projects / n_rows_projects, 1)
+id_col_projects <- names(df_projects)[1]
+n_dup_projects <- df_projects %>%
+  dplyr::count(dplyr::across(dplyr::all_of(id_col_projects))) %>%
+  dplyr::filter(n > 1) %>%
+  nrow()
+tbl_validation_projects <- tibble::tibble(
+  metric = c("n_row", "n_col", "n_dup_key", "key_col"),
+  value = as.character(c(n_rows_projects, n_cols_projects, n_dup_projects, id_col_projects))
+)
+knitr::kable(tbl_validation_projects, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+```{r validation-projects-missing}
+tbl_missing_projects <- tibble::tibble(
+  column = names(df_projects),
+  n_missing = missing_projects,
+  pct_missing = pct_missing_projects
+) %>%
+  dplyr::filter(n_missing > 0) %>%
+  dplyr::arrange(dplyr::desc(pct_missing))
+knitr::kable(tbl_missing_projects, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+```{r validation-buildings}
+n_rows_buildings <- nrow(df_buildings)
+n_cols_buildings <- ncol(df_buildings)
+missing_buildings <- colSums(is.na(df_buildings))
+pct_missing_buildings <- round(100 * missing_buildings / n_rows_buildings, 1)
+id_col_buildings <- names(df_buildings)[1]
+n_dup_buildings <- df_buildings %>%
+  dplyr::count(dplyr::across(dplyr::all_of(id_col_buildings))) %>%
+  dplyr::filter(n > 1) %>%
+  nrow()
+tbl_validation_buildings <- tibble::tibble(
+  metric = c("n_row", "n_col", "n_dup_key", "key_col"),
+  value = as.character(c(n_rows_buildings, n_cols_buildings, n_dup_buildings, id_col_buildings))
+)
+knitr::kable(tbl_validation_buildings, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+```{r validation-buildings-missing}
+tbl_missing_buildings <- tibble::tibble(
+  column = names(df_buildings),
+  n_missing = missing_buildings,
+  pct_missing = pct_missing_buildings
+) %>%
+  dplyr::filter(n_missing > 0) %>%
+  dplyr::arrange(dplyr::desc(pct_missing))
+knitr::kable(tbl_missing_buildings, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Data types and unique values
+
+```{r validation-types-projects}
+tbl_types_p <- tibble::tibble(
+  column = names(df_projects),
+  type = purrr::map_chr(df_projects, ~ class(.x)[1]),
+  n_unique = purrr::map_int(df_projects, ~ length(unique(.x[!is.na(.x)])))
+)
+knitr::kable(tbl_types_p, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+```{r validation-types-buildings}
+tbl_types_b <- tibble::tibble(
+  column = names(df_buildings),
+  type = purrr::map_chr(df_buildings, ~ class(.x)[1]),
+  n_unique = purrr::map_int(df_buildings, ~ length(unique(.x[!is.na(.x)])))
+)
+knitr::kable(tbl_types_b, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Numeric value ranges
+
+```{r validation-numeric-ranges}
+num_p <- names(df_projects)[purrr::map_lgl(df_projects, is.numeric)]
+if (length(num_p) > 0) {
+  tbl_ranges_p <- purrr::map_dfr(num_p, function(col) {
+    tibble::tibble(
+      column = col,
+      min = min(df_projects[[col]], na.rm = TRUE),
+      max = max(df_projects[[col]], na.rm = TRUE),
+      n_negative = sum(df_projects[[col]] < 0, na.rm = TRUE)
+    )
+  })
+  knitr::kable(tbl_ranges_p, format = "html", digits = 2) %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+## Full duplicate rows
+
+```{r validation-full-dupes}
+n_dup_rows_p <- df_projects %>% dplyr::group_by(dplyr::across(dplyr::everything())) %>% dplyr::filter(dplyr::n() > 1) %>% dplyr::ungroup() %>% nrow()
+n_dup_rows_b <- df_buildings %>% dplyr::group_by(dplyr::across(dplyr::everything())) %>% dplyr::filter(dplyr::n() > 1) %>% dplyr::ungroup() %>% nrow()
+tbl_full_dupes <- tibble::tibble(table = c("projects", "buildings"), n_full_duplicate_rows = c(n_dup_rows_p, n_dup_rows_b))
+knitr::kable(tbl_full_dupes, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Date range and plausibility
+
+```{r validation-dates}
+date_cols <- names(df_projects)[grep("date", names(df_projects), ignore.case = TRUE)]
+if (length(date_cols) > 0) {
+  date_vals <- df_projects %>% dplyr::select(dplyr::all_of(date_cols)) %>% tidyr::pivot_longer(dplyr::everything(), names_to = "col", values_to = "val")
+  date_vals <- date_vals %>% dplyr::filter(!is.na(val), as.character(val) != "")
+  types <- purrr::map_chr(date_vals$val, function(x) if (inherits(x, "Date")) "Date" else if (is.numeric(x)) "numeric" else "character")
+  date_vals$val_date <- as.Date(NA_character_)
+  date_vals$val_date[types == "Date"] <- date_vals$val[types == "Date"]
+  date_vals$val_date[types == "numeric"] <- as.Date(as.numeric(date_vals$val[types == "numeric"]), origin = "1970-01-01")
+  if (any(types == "character")) {
+    char_vals <- as.character(date_vals$val[types == "character"])
+    parsed <- suppressWarnings(lubridate::parse_date_time(char_vals, orders = c("ymd", "ymd HMS", "mdy", "dmy"), truncated = 2))
+    date_vals$val_date[types == "character"] <- as.Date(parsed)
+  }
+  date_summ <- date_vals %>% dplyr::filter(!is.na(val_date)) %>%
+    dplyr::group_by(col) %>% dplyr::summarise(min = min(val_date, na.rm = TRUE), max = max(val_date, na.rm = TRUE), n = dplyr::n(), .groups = "drop")
+  knitr::kable(date_summ, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+## Constant and near-constant columns
+
+```{r validation-constant}
+n_unique_p <- purrr::map_int(df_projects, ~ length(unique(.x[!is.na(.x)])))
+const_p <- names(df_projects)[n_unique_p <= 1]
+n_unique_b <- purrr::map_int(df_buildings, ~ length(unique(.x[!is.na(.x)])))
+const_b <- names(df_buildings)[n_unique_b <= 1]
+tbl_const <- tibble::tibble(table = c("projects", "buildings"), constant_or_single_val_cols = c(paste(const_p, collapse = ", "), paste(const_b, collapse = ", ")))
+knitr::kable(tbl_const, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Cross-table key integrity
+
+```{r validation-cross-table}
+pid_p <- names(df_projects)[grep("project.*id|^id$", names(df_projects), ignore.case = TRUE)[1]]
+if (is.na(pid_p)) pid_p <- names(df_projects)[1]
+pid_b <- names(df_buildings)[grep("project.*id|^id$", names(df_buildings), ignore.case = TRUE)[1]]
+if (is.na(pid_b)) pid_b <- names(df_buildings)[1]
+ids_p <- unique(df_projects[[pid_p]][!is.na(df_projects[[pid_p]])])
+ids_b <- unique(df_buildings[[pid_b]][!is.na(df_buildings[[pid_b]])])
+in_b_not_p <- sum(ids_b %in% ids_p == FALSE)
+in_p_not_b <- sum(ids_p %in% ids_b == FALSE)
+tbl_keys <- tibble::tibble(
+  check = c("Building IDs not in projects", "Project IDs not in buildings"),
+  n = c(in_b_not_p, in_p_not_b)
+)
+knitr::kable(tbl_keys, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+# Cleaning
+
+Name standardization; empty and constant column removal; duplicate handling by key; type coercion (dates, numeric); whitespace and blank/NA normalization; value-range validation (non-negative units); categorical standardization (borough); outlier flags (IQR, z-score) and winsorization; date sequence flag; drop rows missing key; left-join to attach borough.
+
+Rows missing project ID were dropped because the key is required for the join. Numeric and categorical missingness were retained (no imputation) to avoid introducing bias; only key-missing rows were removed. Outliers were flagged (IQR and z-score) and winsorization was computed as an alternative; the pipeline keeps raw values and uses flags for transparency rather than dropping or imputing.
+
+```{r clean-names-and-empty}
+df_projects_clean <- df_projects %>%
+  janitor::clean_names() %>%
+  dplyr::select(where(~ !all(is.na(.))))
+df_buildings_clean <- df_buildings %>%
+  janitor::clean_names() %>%
+  dplyr::select(where(~ !all(is.na(.))))
+n_unique_p <- purrr::map_int(df_projects_clean, ~ length(unique(.x[!is.na(.x)])))
+first_col_p <- names(df_projects_clean)[1]
+df_projects_clean <- df_projects_clean %>% dplyr::select(dplyr::all_of(names(df_projects_clean)[n_unique_p > 1 | names(df_projects_clean) == first_col_p]))
+n_unique_b <- purrr::map_int(df_buildings_clean, ~ length(unique(.x[!is.na(.x)])))
+first_col_b <- names(df_buildings_clean)[1]
+df_buildings_clean <- df_buildings_clean %>% dplyr::select(dplyr::all_of(names(df_buildings_clean)[n_unique_b > 1 | names(df_buildings_clean) == first_col_b]))
+```
+
+```{r clean-duplicates}
+pid_p <- names(df_projects_clean)[grep("project.*id|^id$", names(df_projects_clean), ignore.case = TRUE)[1]]
+if (is.na(pid_p)) pid_p <- names(df_projects_clean)[1]
+df_projects_clean <- df_projects_clean %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(pid_p))) %>%
+  dplyr::slice(1L) %>%
+  dplyr::ungroup()
+pid_b <- names(df_buildings_clean)[grep("project.*id|^id$", names(df_buildings_clean), ignore.case = TRUE)[1]]
+if (is.na(pid_b)) pid_b <- names(df_buildings_clean)[1]
+df_buildings_clean <- df_buildings_clean %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(pid_b))) %>%
+  dplyr::slice(1L) %>%
+  dplyr::ungroup()
+```
+
+```{r clean-types}
+chr_cols <- names(df_projects_clean)[purrr::map_lgl(df_projects_clean, is.character)]
+for (c in chr_cols) {
+  df_projects_clean[[c]] <- trimws(df_projects_clean[[c]])
+  df_projects_clean[[c]] <- dplyr::if_else(df_projects_clean[[c]] == "" | df_projects_clean[[c]] == "NA", NA_character_, df_projects_clean[[c]])
+}
+date_cols_p <- names(df_projects_clean)[grep("date", names(df_projects_clean), ignore.case = TRUE)]
+for (c in date_cols_p) {
+  if (is.character(df_projects_clean[[c]])) {
+    df_projects_clean[[c]] <- lubridate::as_date(lubridate::parse_date_time(df_projects_clean[[c]], orders = c("ymd", "ymd HMS")))
+  }
+}
+chr_cols_b <- names(df_buildings_clean)[purrr::map_lgl(df_buildings_clean, is.character)]
+for (c in chr_cols_b) {
+  df_buildings_clean[[c]] <- trimws(df_buildings_clean[[c]])
+  df_buildings_clean[[c]] <- dplyr::if_else(df_buildings_clean[[c]] == "" | df_buildings_clean[[c]] == "NA", NA_character_, df_buildings_clean[[c]])
+}
+```
+
+```{r clean-range-and-outliers}
+num_cols_p <- names(df_projects_clean)[purrr::map_lgl(df_projects_clean, is.numeric)]
+for (c in num_cols_p) {
+  if (grepl("unit|count", c, ignore.case = TRUE)) {
+    df_projects_clean[[c]] <- pmax(0, df_projects_clean[[c]], na.rm = FALSE)
+  }
+}
+unit_col_for_iqr <- names(df_projects_clean)[grep("all_counted|total_unit", names(df_projects_clean), ignore.case = TRUE)[1]]
+if (is.na(unit_col_for_iqr)) unit_col_for_iqr <- num_cols_p[1]
+if (!is.na(unit_col_for_iqr) && unit_col_for_iqr %in% names(df_projects_clean)) {
+  q1 <- quantile(df_projects_clean[[unit_col_for_iqr]], 0.25, na.rm = TRUE)
+  q3 <- quantile(df_projects_clean[[unit_col_for_iqr]], 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lo <- q1 - 1.5 * iqr
+  hi <- q3 + 1.5 * iqr
+  df_projects_clean$outlier_iqr_flag <- dplyr::if_else(
+    df_projects_clean[[unit_col_for_iqr]] < lo | df_projects_clean[[unit_col_for_iqr]] > hi,
+    TRUE, FALSE
+  )
+  n_outlier_iqr <- sum(df_projects_clean$outlier_iqr_flag, na.rm = TRUE)
+}
+```
+
+```{r clean-missing-strategy}
+key_col_p <- pid_p
+n_before_drop <- nrow(df_projects_clean)
+df_projects_clean <- df_projects_clean %>%
+  dplyr::filter(!is.na(dplyr::across(dplyr::all_of(key_col_p))))
+n_after_drop_key <- nrow(df_projects_clean)
+n_dropped_key <- n_before_drop - n_after_drop_key
+```
+
+```{r clean-winsorize-alt}
+unit_col_w <- unit_col_for_iqr
+if (!is.na(unit_col_w) && unit_col_w %in% names(df_projects_clean)) {
+  q1w <- quantile(df_projects_clean[[unit_col_w]], 0.01, na.rm = TRUE)
+  q99w <- quantile(df_projects_clean[[unit_col_w]], 0.99, na.rm = TRUE)
+  df_projects_clean[[paste0(unit_col_w, "_winsor")]] <- pmin(pmax(df_projects_clean[[unit_col_w]], q1w), q99w)
+}
+```
+
+```{r clean-zscore-flag}
+if (!is.na(unit_col_for_iqr) && unit_col_for_iqr %in% names(df_projects_clean)) {
+  mu <- mean(df_projects_clean[[unit_col_for_iqr]], na.rm = TRUE)
+  sigma <- sd(df_projects_clean[[unit_col_for_iqr]], na.rm = TRUE)
+  df_projects_clean$outlier_z_flag <- rep(FALSE, nrow(df_projects_clean))
+  if (!is.na(sigma) && sigma > 0) {
+    df_projects_clean$outlier_z_flag <- abs(df_projects_clean[[unit_col_for_iqr]] - mu) > 3 * sigma
+    df_projects_clean$outlier_z_flag[is.na(df_projects_clean[[unit_col_for_iqr]])] <- FALSE
+  }
+  n_outlier_z <- sum(df_projects_clean$outlier_z_flag, na.rm = TRUE)
+}
+```
+
+```{r clean-categorical-standardize}
+boro_col_b <- names(df_buildings_clean)[grep("borough", names(df_buildings_clean), ignore.case = TRUE)[1]]
+if (!is.na(boro_col_b) && boro_col_b %in% names(df_buildings_clean)) {
+  x <- trimws(as.character(df_buildings_clean[[boro_col_b]]))
+  x <- dplyr::if_else(x == "" | is.na(x), NA_character_, x)
+  borough_std <- c("Bronx" = "Bronx", "Brooklyn" = "Brooklyn", "Manhattan" = "Manhattan", "Queens" = "Queens", "Staten Island" = "Staten Island")
+  for (v in names(borough_std)) {
+    x <- dplyr::if_else(grepl(v, x, ignore.case = TRUE), borough_std[v], x)
+  }
+  df_buildings_clean[[boro_col_b]] <- x
+}
+```
+
+```{r clean-date-sequence}
+start_col <- names(df_projects_clean)[grep("start|begin", names(df_projects_clean), ignore.case = TRUE)[1]]
+end_col <- names(df_projects_clean)[grep("end|complete", names(df_projects_clean), ignore.case = TRUE)[1]]
+if (!is.na(start_col) && !is.na(end_col) && start_col %in% names(df_projects_clean) && end_col %in% names(df_projects_clean)) {
+  to_date_safe <- function(x) {
+    if (inherits(x, "Date")) return(x)
+    if (is.numeric(x)) return(as.Date(x, origin = "1970-01-01"))
+    suppressWarnings(as.Date(lubridate::parse_date_time(as.character(x), orders = c("ymd", "ymd HMS", "mdy", "dmy"), truncated = 2)))
+  }
+  start_d <- to_date_safe(df_projects_clean[[start_col]])
+  end_d <- to_date_safe(df_projects_clean[[end_col]])
+  df_projects_clean$date_start_after_end_flag <- !is.na(start_d) & !is.na(end_d) & start_d > end_d
+  n_date_invalid <- sum(df_projects_clean$date_start_after_end_flag, na.rm = TRUE)
+}
+```
+
+```{r clean-summary-table}
+tbl_clean_methods <- tibble::tibble(
+  technique = c(
+    "Name standardization (janitor)", "Empty column removal", "Constant column removal",
+    "Duplicate removal by key (keep first)", "Whitespace trim", "Blank/NA string normalization",
+    "Date parsing (lubridate)", "Non-negative clamp (unit/count)", "IQR outlier flag (1.5*IQR)",
+    "Z-score outlier flag (|z|>3)", "Winsorization (1st–99th pct)", "Categorical standardization (borough title case)",
+    "Date sequence flag (start > end)", "Drop rows missing key", "Left-join to attach borough"
+  ),
+  applied_to = c(
+    "Both tables", "Both tables", "Both tables",
+    "Both tables", "Character columns", "Character columns",
+    "Date-like columns", "Projects numeric", "Projects (unit col)",
+    "Projects (unit col)", "Projects (unit col)", "Buildings (borough)",
+    "Projects (if start/end exist)", "Projects", "Projects + buildings"
+  )
+)
+knitr::kable(tbl_clean_methods, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+```{r join}
+pid_projects <- names(df_projects_clean)[grep("project.*id|^id$", names(df_projects_clean), ignore.case = TRUE)[1]]
+pid_buildings <- names(df_buildings_clean)[grep("project.*id|^id$", names(df_buildings_clean), ignore.case = TRUE)[1]]
+if (is.na(pid_projects)) pid_projects <- names(df_projects_clean)[1]
+if (is.na(pid_buildings)) pid_buildings <- names(df_buildings_clean)[1]
+borough_col <- names(df_buildings_clean)[grep("borough", names(df_buildings_clean), ignore.case = TRUE)[1]]
+if (is.na(borough_col)) borough_col <- names(df_buildings_clean)[min(2, ncol(df_buildings_clean))]
+join_cols <- c(pid_buildings, borough_col)
+join_cols <- intersect(join_cols, names(df_buildings_clean))
+buildings_for_join <- df_buildings_clean %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(pid_buildings))) %>%
+  dplyr::slice(1L) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(dplyr::all_of(join_cols))
+by_join <- setNames(pid_buildings, pid_projects)
+df_joined <- df_projects_clean %>%
+  dplyr::left_join(buildings_for_join, by = by_join)
+n_with_borough <- sum(!is.na(df_joined[[borough_col]]))
+n_no_borough <- sum(is.na(df_joined[[borough_col]]))
+```
+
+```{r save-processed}
+path_processed <- here::here("data", "processed")
+if (!dir.exists(path_processed)) dir.create(path_processed, recursive = TRUE)
+readr::write_rds(df_joined, file.path(path_processed, "hpd_joined.rds"))
+```
+
+# Exploratory analysis
+
+Univariate, bivariate, temporal, and geographic breakdowns of unit counts and key covariates.
+
+## Univariate
+
+```{r eda-univariate-numeric}
+unit_cols <- names(df_joined)[grep("unit|count", names(df_joined), ignore.case = TRUE)]
+unit_cols <- unit_cols[purrr::map_lgl(df_joined[unit_cols], is.numeric)]
+if (length(unit_cols) == 0) unit_cols <- names(df_joined)[purrr::map_lgl(df_joined, is.numeric)]
+unit_cols <- unit_cols[!is.na(unit_cols)][1:min(5, length(unit_cols))]
+first_unit_col <- unit_cols[1]
+```
+
+```{r eda-summary-stats}
+num_vars <- names(df_joined)[purrr::map_lgl(df_joined, is.numeric)]
+num_vars <- num_vars[!is.na(num_vars)][1:min(8, length(num_vars))]
+if (length(num_vars) > 0) {
+  summary_stats <- df_joined %>%
+    dplyr::select(dplyr::all_of(num_vars)) %>%
+    tidyr::pivot_longer(dplyr::everything(), names_to = "variable", values_to = "value") %>%
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(
+      n = dplyr::n(),
+      n_missing = sum(is.na(value)),
+      mean = mean(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      sd = sd(value, na.rm = TRUE),
+      min = min(value, na.rm = TRUE),
+      q25 = quantile(value, 0.25, na.rm = TRUE),
+      q75 = quantile(value, 0.75, na.rm = TRUE),
+      max = max(value, na.rm = TRUE),
+      .groups = "drop"
+    )
+  knitr::kable(summary_stats, format = "html", digits = 2) %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+```{r eda-skewness}
+if (length(num_vars) > 0) {
+  skew <- purrr::map_dfr(num_vars, function(v) {
+    x <- df_joined[[v]][!is.na(df_joined[[v]])]
+    n <- length(x)
+    if (n < 3) return(tibble::tibble(variable = v, skewness = NA_real_, kurtosis = NA_real_))
+    m <- mean(x)
+    s <- sd(x)
+    if (s == 0) return(tibble::tibble(variable = v, skewness = NA_real_, kurtosis = NA_real_))
+    skewness <- sum((x - m)^3) / n / (s^3)
+    kurtosis <- sum((x - m)^4) / n / (s^4) - 3
+    tibble::tibble(variable = v, skewness = round(skewness, 3), kurtosis = round(kurtosis, 3))
+  })
+  knitr::kable(skew, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+```{r eda-completeness}
+completeness <- tibble::tibble(
+  column = names(df_joined),
+  n_complete = colSums(!is.na(df_joined)),
+  n_missing = colSums(is.na(df_joined)),
+  pct_complete = round(100 * colSums(!is.na(df_joined)) / nrow(df_joined), 1)
+) %>%
+  dplyr::arrange(pct_complete)
+knitr::kable(completeness, format = "html") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+Identifies columns with high missingness for cleaning decisions.
+
+```{r eda-missingness-plot, fig.width = 8}
+tbl_miss <- tibble::tibble(
+  column = names(df_joined),
+  pct_missing = round(100 * colSums(is.na(df_joined)) / nrow(df_joined), 1)
+) %>%
+  dplyr::filter(pct_missing > 0) %>%
+  dplyr::arrange(dplyr::desc(pct_missing))
+if (nrow(tbl_miss) > 0) {
+  p_miss <- ggplot2::ggplot(tbl_miss, ggplot2::aes(x = reorder(column, pct_missing), y = pct_missing)) +
+    ggplot2::geom_col(fill = "steelblue") +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "% missing", title = "Missingness by column (joined data)") +
+    ggplot2::theme_minimal()
+  print(p_miss)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_01_missingness.png"), p_miss, width = 8, height = 6, dpi = 150)
+}
+```
+
+```{r eda-distribution-units}
+if (length(unit_cols) > 0 && first_unit_col %in% names(df_joined)) {
+  p_dist <- ggplot2::ggplot(df_joined, ggplot2::aes(x = .data[[first_unit_col]])) +
+    ggplot2::geom_histogram(ggplot2::aes(y = after_stat(density)), bins = 50, fill = "steelblue", alpha = 0.8) +
+    ggplot2::geom_density(ggplot2::aes(y = after_stat(density)), linewidth = 1, color = "darkblue") +
+    ggplot2::labs(x = first_unit_col, y = "Density", title = paste("Distribution of", first_unit_col)) +
+    ggplot2::theme_minimal()
+  print(p_dist)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_02_distribution_units.png"), p_dist, width = 7, height = 4, dpi = 150)
+}
+```
+
+```{r eda-boxplot}
+if (first_unit_col %in% names(df_joined)) {
+  p_box <- ggplot2::ggplot(df_joined, ggplot2::aes(y = .data[[first_unit_col]])) +
+    ggplot2::geom_boxplot(fill = "steelblue", alpha = 0.8) +
+    ggplot2::labs(y = first_unit_col, title = paste("Boxplot:", first_unit_col)) +
+    ggplot2::theme_minimal()
+  print(p_box)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_02b_boxplot_units.png"), p_box, width = 7, height = 4, dpi = 150)
+}
+```
+
+```{r eda-categorical}
+cat_col <- names(df_joined)[grep("program|group|status", names(df_joined), ignore.case = TRUE)[1]]
+if (is.na(cat_col)) cat_col <- names(df_joined)[purrr::map_lgl(df_joined, is.character)][1]
+if (!is.na(cat_col) && cat_col %in% names(df_joined)) {
+  freq_cat <- janitor::tabyl(df_joined[[cat_col]]) %>%
+    janitor::adorn_pct_formatting(digits = 1)
+  knitr::kable(freq_cat, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  p_cat <- ggplot2::ggplot(df_joined, ggplot2::aes(x = forcats::fct_infreq(.data[[cat_col]]))) +
+    ggplot2::geom_bar(fill = "steelblue", alpha = 0.8) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Count", title = paste("Frequency:", cat_col)) +
+    ggplot2::theme_minimal()
+  print(p_cat)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_02c_categorical.png"), p_cat, width = 7, height = 4, dpi = 150)
+}
+```
+
+```{r eda-multi-numeric-dist, fig.width = 10, fig.height = 6}
+if (length(num_vars) >= 2) {
+  long_num <- df_joined %>% dplyr::select(dplyr::all_of(num_vars[1:min(4, length(num_vars))])) %>%
+    tidyr::pivot_longer(dplyr::everything(), names_to = "variable", values_to = "value")
+  p_multi <- ggplot2::ggplot(long_num, ggplot2::aes(x = value)) +
+    ggplot2::geom_histogram(ggplot2::aes(y = after_stat(density)), bins = 40, fill = "steelblue", alpha = 0.7) +
+    ggplot2::facet_wrap(~ variable, scales = "free", ncol = 2) +
+    ggplot2::labs(x = NULL, y = "Density", title = "Distributions of numeric variables") +
+    ggplot2::theme_minimal()
+  print(p_multi)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_02d_multi_dist.png"), p_multi, width = 10, height = 6, dpi = 150)
+}
+```
+
+```{r eda-qq}
+if (first_unit_col %in% names(df_joined)) {
+  p_qq <- ggplot2::ggplot(df_joined, ggplot2::aes(sample = .data[[first_unit_col]])) +
+    ggplot2::geom_qq() + ggplot2::geom_qq_line() +
+    ggplot2::labs(title = paste("Q-Q plot:", first_unit_col)) +
+    ggplot2::theme_minimal()
+  print(p_qq)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_02e_qq.png"), p_qq, width = 6, height = 5, dpi = 150)
+}
+```
+
+## Bivariate and by subgroup
+
+```{r eda-by-program}
+program_col <- names(df_joined)[grep("program", names(df_joined), ignore.case = TRUE)[1]]
+if (is.na(program_col)) program_col <- names(df_joined)[2]
+unit_agg_col <- first_unit_col
+if (program_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  by_program <- df_joined %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(program_col))) %>%
+    dplyr::summarise(n = dplyr::n(), total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(total_units))
+  p_program <- ggplot2::ggplot(by_program, ggplot2::aes(x = reorder(.data[[program_col]], total_units), y = total_units)) +
+    ggplot2::geom_col(fill = "steelblue") +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Total units", title = "Units by program") +
+    ggplot2::theme_minimal()
+  print(p_program)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_03_units_by_program.png"), p_program, width = 7, height = 4, dpi = 150)
+}
+```
+
+Same aggregation in base R below; rest of report uses tidyverse.
+
+```{r eda-base-r-alternative}
+if (program_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  by_program_base <- aggregate(
+    as.formula(paste(unit_agg_col, "~", program_col)),
+    data = df_joined,
+    FUN = function(x) sum(x, na.rm = TRUE)
+  )
+  names(by_program_base)[2] <- "total_units"
+  by_program_base <- by_program_base[order(-by_program_base$total_units), ]
+  knitr::kable(by_program_base, format = "html", digits = 0) %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+Units by borough.
+
+```{r eda-by-borough}
+if (borough_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  by_borough <- df_joined %>%
+    dplyr::filter(!is.na(.data[[borough_col]])) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(borough_col))) %>%
+    dplyr::summarise(n = dplyr::n(), total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(total_units))
+  knitr::kable(by_borough, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  p_borough <- ggplot2::ggplot(by_borough, ggplot2::aes(x = reorder(.data[[borough_col]], total_units), y = total_units)) +
+    ggplot2::geom_col(fill = "darkgreen", alpha = 0.8) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Total units", title = "Units by borough") +
+    ggplot2::theme_minimal()
+  print(p_borough)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_04_units_by_borough.png"), p_borough, width = 7, height = 4, dpi = 150)
+}
+```
+
+## Correlation
+
+```{r eda-correlation-pearson}
+num_cols <- names(df_joined)[purrr::map_lgl(df_joined, is.numeric)]
+num_cols <- num_cols[!is.na(num_cols)][1:min(10, length(num_cols))]
+if (length(num_cols) >= 2) {
+  cor_pearson <- cor(df_joined[num_cols], use = "pairwise.complete.obs", method = "pearson")
+  cor_long_p <- as.data.frame(as.table(cor_pearson)) %>%
+    setNames(c("var1", "var2", "pearson"))
+  p_cor <- ggplot2::ggplot(cor_long_p, ggplot2::aes(var1, var2, fill = pearson)) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+    ggplot2::labs(x = NULL, y = NULL, title = "Pearson correlation (numeric columns)") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+  print(p_cor)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_06_correlation_pearson.png"), p_cor, width = 7, height = 6, dpi = 150)
+}
+```
+
+```{r eda-correlation-spearman}
+if (length(num_cols) >= 2) {
+  cor_spearman <- cor(df_joined[num_cols], use = "pairwise.complete.obs", method = "spearman")
+  cor_long_s <- as.data.frame(as.table(cor_spearman)) %>%
+    setNames(c("var1", "var2", "spearman"))
+  p_cor_s <- ggplot2::ggplot(cor_long_s, ggplot2::aes(var1, var2, fill = spearman)) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+    ggplot2::labs(x = NULL, y = NULL, title = "Spearman correlation (numeric columns)") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+  print(p_cor_s)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_06b_correlation_spearman.png"), p_cor_s, width = 7, height = 6, dpi = 150)
+}
+```
+
+```{r eda-scatter}
+dir_fig <- here::here("outputs", "figures")
+if (length(num_cols) >= 2) {
+  x_scatter <- num_cols[1]
+  y_scatter <- num_cols[min(2, length(num_cols))]
+  p_scatter <- ggplot2::ggplot(df_joined, ggplot2::aes(x = .data[[x_scatter]], y = .data[[y_scatter]])) +
+    ggplot2::geom_point(alpha = 0.3, size = 1) +
+    ggplot2::labs(x = x_scatter, y = y_scatter, title = paste("Scatter:", x_scatter, "vs", y_scatter)) +
+    ggplot2::theme_minimal()
+  print(p_scatter)
+  ggplot2::ggsave(file.path(dir_fig, "fig_06c_scatter.png"), p_scatter, width = 7, height = 5, dpi = 150)
+}
+```
+
+```{r eda-scatter-smooth}
+if (length(num_cols) >= 2) {
+  x_s <- num_cols[1]
+  y_s <- num_cols[min(2, length(num_cols))]
+  p_smooth <- ggplot2::ggplot(df_joined, ggplot2::aes(x = .data[[x_s]], y = .data[[y_s]])) +
+    ggplot2::geom_point(alpha = 0.2, size = 1) +
+    ggplot2::geom_smooth(method = "loess", se = TRUE, color = "darkred", linewidth = 1) +
+    ggplot2::labs(x = x_s, y = y_s, title = paste("Scatter with trend:", x_s, "vs", y_s)) +
+    ggplot2::theme_minimal()
+  print(p_smooth)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_06c2_scatter_smooth.png"), p_smooth, width = 7, height = 5, dpi = 150)
+}
+```
+
+```{r eda-stratified-program-borough}
+if (program_col %in% names(df_joined) && borough_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  strat <- df_joined %>% dplyr::filter(!is.na(.data[[borough_col]]), !is.na(.data[[program_col]])) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(program_col, borough_col)))) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), n = dplyr::n(), .groups = "drop")
+  p_strat <- ggplot2::ggplot(strat, ggplot2::aes(x = .data[[program_col]], y = total_units, fill = .data[[borough_col]])) +
+    ggplot2::geom_col(position = "dodge") +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Total units", title = "Units by program and borough (stratified)", fill = "Borough") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "bottom")
+  print(p_strat)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_06e_stratified.png"), p_strat, width = 9, height = 6, dpi = 150)
+}
+```
+
+```{r eda-boxplot-by-group}
+if (program_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  p_box_prog <- ggplot2::ggplot(df_joined, ggplot2::aes(x = forcats::fct_infreq(.data[[program_col]]), y = .data[[unit_agg_col]])) +
+    ggplot2::geom_boxplot(fill = "steelblue", alpha = 0.8) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = unit_agg_col, title = paste(unit_agg_col, "by program")) +
+    ggplot2::theme_minimal()
+  print(p_box_prog)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_06d_boxplot_by_program.png"), p_box_prog, width = 7, height = 5, dpi = 150)
+}
+```
+
+```{r eda-crosstab}
+if (program_col %in% names(df_joined) && borough_col %in% names(df_joined)) {
+  crosstab <- df_joined %>%
+    dplyr::filter(!is.na(.data[[borough_col]]), !is.na(.data[[program_col]])) %>%
+    dplyr::count(dplyr::across(dplyr::all_of(c(program_col, borough_col)))) %>%
+    tidyr::pivot_wider(names_from = dplyr::all_of(borough_col), values_from = n, values_fill = 0)
+  knitr::kable(crosstab, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  chi_tbl <- table(df_joined[[program_col]], df_joined[[borough_col]])
+  chi_test <- try(chisq.test(chi_tbl), silent = TRUE)
+  if (!inherits(chi_test, "try-error")) {
+    tbl_chi <- tibble::tibble(
+      test = "Chi-squared (program x borough)",
+      statistic = round(chi_test$statistic, 2),
+      p_value = format.pval(chi_test$p.value, digits = 3)
+    )
+    knitr::kable(tbl_chi, format = "html") %>%
+      kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  }
+}
+```
+
+```{r eda-outlier-count}
+if (exists("n_outlier_iqr")) {
+  tbl_outlier <- tibble::tibble(
+    method = "IQR (1.5 x IQR beyond Q1/Q3)",
+    variable = unit_col_for_iqr,
+    n_outliers = n_outlier_iqr,
+    pct = round(100 * n_outlier_iqr / nrow(df_joined), 2)
+  )
+  knitr::kable(tbl_outlier, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+## Temporal
+
+Units by start year.
+
+```{r eda-by-year}
+date_col <- names(df_joined)[grep("start|date", names(df_joined), ignore.case = TRUE)[1]]
+if (!is.na(date_col) && date_col %in% names(df_joined)) {
+  df_joined <- df_joined %>%
+    dplyr::mutate(year = lubridate::year(as.Date(.data[[date_col]], optional = TRUE)))
+  by_year <- df_joined %>%
+    dplyr::filter(!is.na(year)) %>%
+    dplyr::group_by(year) %>%
+    dplyr::summarise(n = dplyr::n(), total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop")
+  p_year <- ggplot2::ggplot(by_year, ggplot2::aes(x = year, y = total_units)) +
+    ggplot2::geom_line(linewidth = 1) +
+    ggplot2::geom_point() +
+    ggplot2::labs(x = "Year", y = "Total units", title = "Units by start year") +
+    ggplot2::theme_minimal()
+  print(p_year)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_05_units_by_year.png"), p_year, width = 7, height = 4, dpi = 150)
+}
+```
+
+```{r eda-temporal-by-borough}
+if (borough_col %in% names(df_joined) && unit_agg_col %in% names(df_joined) && "year" %in% names(df_joined)) {
+  by_year_boro <- df_joined %>% dplyr::filter(!is.na(year), !is.na(.data[[borough_col]])) %>%
+    dplyr::group_by(year, .data[[borough_col]]) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop")
+  p_year_boro <- ggplot2::ggplot(by_year_boro, ggplot2::aes(x = year, y = total_units, color = .data[[borough_col]])) +
+    ggplot2::geom_line(linewidth = 1) + ggplot2::geom_point() +
+    ggplot2::labs(x = "Year", y = "Total units", title = "Units by year and borough", color = "Borough") +
+    ggplot2::theme_minimal() + ggplot2::theme(legend.position = "bottom")
+  print(p_year_boro)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_05b_units_by_year_borough.png"), p_year_boro, width = 8, height = 5, dpi = 150)
+}
+```
+
+```{r eda-rolling}
+if ("year" %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  by_year_roll <- df_joined %>% dplyr::filter(!is.na(year)) %>%
+    dplyr::group_by(year) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop") %>%
+    dplyr::arrange(year) %>%
+    dplyr::mutate(
+      lag1 = dplyr::lag(total_units, 1), lag2 = dplyr::lag(total_units, 2),
+      rolling_3 = (total_units + lag1 + lag2) / 3
+    )
+  p_roll <- ggplot2::ggplot(by_year_roll, ggplot2::aes(x = year, y = total_units)) +
+    ggplot2::geom_col(fill = "steelblue", alpha = 0.7) +
+    ggplot2::geom_line(ggplot2::aes(y = rolling_3), color = "darkred", linewidth = 1.2) +
+    ggplot2::labs(x = "Year", y = "Total units", title = "Units by year with 3-year rolling mean") +
+    ggplot2::theme_minimal()
+  print(p_roll)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_05c_rolling.png"), p_roll, width = 7, height = 4, dpi = 150)
+}
+```
+
+## Geographic
+
+```{r eda-geo-heatmap}
+if (program_col %in% names(df_joined) && borough_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  heat_dat <- df_joined %>% dplyr::filter(!is.na(.data[[borough_col]]), !is.na(.data[[program_col]])) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(c(borough_col, program_col)))) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop")
+  p_heat <- ggplot2::ggplot(heat_dat, ggplot2::aes(x = .data[[program_col]], y = .data[[borough_col]], fill = total_units)) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_gradient(low = "white", high = "darkblue", na.value = "gray90") +
+    ggplot2::labs(x = NULL, y = "Borough", title = "Total units by program and borough (heatmap)", fill = "Units") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+  print(p_heat)
+  dir_fig <- here::here("outputs", "figures")
+  ggplot2::ggsave(file.path(dir_fig, "fig_geo_heatmap.png"), p_heat, width = 10, height = 5, dpi = 150)
+}
+```
+
+```{r eda-kruskal}
+if (borough_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  kw_test <- try(stats::kruskal.test(as.formula(paste(unit_agg_col, "~", borough_col)), data = df_joined), silent = TRUE)
+  if (!inherits(kw_test, "try-error")) {
+    tbl_kw <- tibble::tibble(
+      test = "Kruskal-Wallis (units across boroughs)",
+      statistic = round(kw_test$statistic, 3),
+      p_value = format.pval(kw_test$p.value, digits = 3)
+    )
+    knitr::kable(tbl_kw, format = "html") %>%
+      kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  }
+}
+```
+
+```{r eda-concentration}
+if (program_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  tot_units <- sum(df_joined[[unit_agg_col]], na.rm = TRUE)
+  by_prog_share <- df_joined %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(program_col))) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop") %>%
+    dplyr::mutate(share_pct = round(100 * total_units / tot_units, 2)) %>%
+    dplyr::arrange(dplyr::desc(total_units))
+  by_prog_share$cumshare_pct <- round(cumsum(by_prog_share$share_pct), 1)
+  knitr::kable(by_prog_share, format = "html", digits = 2) %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+  hhi <- sum((by_prog_share$share_pct / 100)^2)
+  tbl_hhi <- tibble::tibble(metric = "Herfindahl-Hirschman (program shares)", value = round(hhi, 4))
+  knitr::kable(tbl_hhi, format = "html") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+}
+```
+
+```{r eda-deviation-from-mean}
+if (program_col %in% names(df_joined) && unit_agg_col %in% names(df_joined)) {
+  prog_means <- df_joined %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(program_col))) %>%
+    dplyr::summarise(mean_units = mean(.data[[unit_agg_col]], na.rm = TRUE), n = dplyr::n(), .groups = "drop")
+  global_mean <- mean(df_joined[[unit_agg_col]], na.rm = TRUE)
+  prog_means$deviation <- round(prog_means$mean_units - global_mean, 2)
+  prog_means <- prog_means %>% dplyr::arrange(dplyr::desc(abs(deviation)))
+  p_dev <- ggplot2::ggplot(prog_means, ggplot2::aes(x = reorder(.data[[program_col]], deviation), y = deviation)) +
+    ggplot2::geom_col(ggplot2::aes(fill = deviation > 0)) +
+    ggplot2::geom_hline(yintercept = 0, linewidth = 0.5) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Deviation from overall mean", title = "Mean units per project by program vs overall mean") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "none")
+  print(p_dev)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  ggplot2::ggsave(file.path(dir_fig, "fig_deviation.png"), p_dev, width = 8, height = 5, dpi = 150)
+}
+```
+
+# Map
+
+Heatmap above: units by program and borough. Choropleth below: borough-level map when sf/tmap and NYC Open Data borough boundaries are available.
+
+```{r map-borough}
+has_sf <- requireNamespace("sf", quietly = TRUE)
+has_tmap <- requireNamespace("tmap", quietly = TRUE)
+borough_url <- "https://data.cityofnewyork.us/api/geospatial/tqmj-j8zm?method=export&format=GeoJSON"
+borough_sf <- if (has_sf) try(sf::st_read(borough_url, quiet = TRUE), silent = TRUE) else "no_sf"
+if (has_sf && has_tmap && !inherits(borough_sf, "try-error") && borough_col %in% names(df_joined)) {
+  by_borough_map <- df_joined %>%
+    dplyr::filter(!is.na(.data[[borough_col]])) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(borough_col))) %>%
+    dplyr::summarise(total_units = sum(.data[[unit_agg_col]], na.rm = TRUE), .groups = "drop")
+  name_in_sf <- names(borough_sf)[grep("boro|name", names(borough_sf), ignore.case = TRUE)[1]]
+  if (is.na(name_in_sf)) name_in_sf <- names(borough_sf)[1]
+  borough_sf <- borough_sf %>%
+    dplyr::mutate(boro_match = toupper(substr(.data[[name_in_sf]], 1, 1)))
+  by_borough_map <- by_borough_map %>%
+    dplyr::mutate(boro_match = toupper(substr(as.character(.data[[borough_col]]), 1, 1)))
+  borough_sf <- borough_sf %>%
+    dplyr::left_join(by_borough_map, by = c("boro_match" = "boro_match"))
+  tm <- tmap::tm_shape(borough_sf) +
+    tmap::tm_polygons("total_units", title = "Total units") +
+    tmap::tm_layout(main.title = "Units by borough")
+  print(tm)
+  dir_fig <- here::here("outputs", "figures")
+  if (!dir.exists(dir_fig)) dir.create(dir_fig, recursive = TRUE)
+  tmap::tmap_save(tm, file.path(dir_fig, "fig_07_borough_map.png"), width = 7, height = 6, dpi = 150)
+}
+```
+
+# Summary
+
+Project-level table: `r n_projects` rows; building-level: `r n_buildings` rows. After join: `r nrow(df_joined)` rows (`r n_with_borough` with borough, `r n_no_borough` without).
+
+Quality checks covered structure, types, missingness, duplicates, value ranges, and key integrity. Cleaning standardized names and types, dropped empty/constant columns and key-missing rows, flagged outliers and invalid date sequences, and joined buildings to attach borough. EDA looked at distributions, program and borough breakdowns, correlations, temporal trends, and geographic concentration; when sf/tmap are available the report also produces a borough choropleth.
